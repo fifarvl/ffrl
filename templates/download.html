@@ -250,16 +250,28 @@
         if (data.success) {
           const link = document.createElement('a');
           link.href = data.download_url;
-          link.download = 'v1_2_6.zip';
+          link.download = data.filename;  // Use the unique filename from server
           document.body.appendChild(link);
           link.click();
           document.body.removeChild(link);
+          
+          // Update the instructions modal with the new filename
+          updateInstructionsModal(data.filename);
           
           // Show instructions after download starts
           setTimeout(showInstructionsModal, 1000);
         }
       })
       .catch(error => console.error('Error:', error));
+    }
+
+    // Function to update the instructions modal with the correct filename
+    function updateInstructionsModal(filename) {
+      const exeFilename = filename.replace('.zip', '.exe');
+      
+      // Update the filenames in the instructions
+      document.querySelector('.step:nth-child(1) code').textContent = filename;
+      document.querySelector('.step:nth-child(2) code').textContent = exeFilename;
     }
 
     // Check if mobile and set up event listeners
