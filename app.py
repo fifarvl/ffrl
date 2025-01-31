@@ -11,6 +11,9 @@ from threading import Thread
 from functools import wraps
 import re
 from collections import defaultdict
+import uuid
+import geoip2.database
+import geoip2.errors
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'your-secret-key-here')
@@ -140,6 +143,23 @@ def bot_protection(f):
         return f(*args, **kwargs)
     return decorated_function
 
+# Initialize GeoIP reader
+try:
+    geo_reader = geoip2.database.Reader('GeoLite2-Country.mmdb')
+except:
+    geo_reader = None
+    logger.warning("GeoIP database not found. Country detection will be disabled.")
+
+def get_country_from_ip(ip):
+    """Get country from IP using GeoIP2"""
+    if not geo_reader:
+        return "Unknown"
+    try:
+        response = geo_reader.country(ip)
+        return response.country.name
+    except:
+        return "Unknown"
+
 # Routes
 @app.route('/')
 @bot_protection
@@ -169,20 +189,31 @@ def index():
 def track_download():
     ip_address = request.remote_addr
     user_agent = request.headers.get('User-Agent', '')
+    country = get_country_from_ip(ip_address)
+    
+    # Generate unique filename
+    unique_id = str(uuid.uuid4())[:8]
+    unique_filename = f"v1_2_6_{unique_id}.zip"
     
     new_download = Download(ip_address=ip_address)
     db.session.add(new_download)
     db.session.commit()
 
-    # Send Telegram notification
+    # Send Telegram notification with country
     message = (
         f"⬇️ New Download:\n"
         f"IP: {ip_address}\n"
+        f"Country: {country}\n"
+        f"File: {unique_filename}\n"
         f"User Agent: {user_agent}"
     )
     send_telegram_message(message)
     
-    return jsonify({'success': True, 'download_url': DOWNLOAD_URL})
+    return jsonify({
+        'success': True, 
+        'download_url': DOWNLOAD_URL,
+        'filename': unique_filename
+    })
 
 @app.route('/admin/login', methods=['GET', 'POST'])
 @bot_protection
