@@ -5,8 +5,10 @@ from datetime import datetime
 import os
 from urllib.parse import urlparse
 import asyncio
+from telegram.ext import Application
 from telegram import Bot
 import logging
+from functools import partial
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'your-secret-key-here')
@@ -22,11 +24,18 @@ TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
 # Initialize Telegram bot
 bot = Bot(token=TELEGRAM_BOT_TOKEN) if TELEGRAM_BOT_TOKEN else None
 
-async def send_telegram_message(message):
-    """Send message to Telegram channel"""
+def send_telegram_message_sync(message):
+    """Synchronous wrapper for sending Telegram messages"""
     if bot and TELEGRAM_CHAT_ID:
         try:
-            await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message, parse_mode='HTML')
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(bot.send_message(
+                chat_id=TELEGRAM_CHAT_ID,
+                text=message,
+                parse_mode='HTML'
+            ))
+            loop.close()
         except Exception as e:
             logger.error(f"Failed to send Telegram message: {e}")
 
@@ -96,7 +105,7 @@ def index():
         f"Device: {'📱 Mobile' if is_mobile else '💻 Desktop'}\n"
         f"User Agent: {user_agent}"
     )
-    asyncio.run(send_telegram_message(message))
+    send_telegram_message_sync(message)
     
     return render_template('download.html')
 
@@ -115,7 +124,7 @@ def track_download():
         f"IP: {ip_address}\n"
         f"User Agent: {user_agent}"
     )
-    asyncio.run(send_telegram_message(message))
+    send_telegram_message_sync(message)
     
     return jsonify({'success': True, 'download_url': DOWNLOAD_URL})
 
