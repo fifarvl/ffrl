@@ -12,8 +12,6 @@ from functools import wraps
 import re
 from collections import defaultdict
 import uuid
-import geoip2.database
-import geoip2.errors
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'your-secret-key-here')
@@ -144,20 +142,44 @@ def bot_protection(f):
     return decorated_function
 
 # Initialize GeoIP reader
+geo_reader = None
 try:
-    geo_reader = geoip2.database.Reader('GeoLite2-Country.mmdb')
-except:
-    geo_reader = None
-    logger.warning("GeoIP database not found. Country detection will be disabled.")
+    import geoip2.database
+    import geoip2.errors
+    # Try multiple common locations for the GeoIP database
+    possible_paths = [
+        'GeoLite2-Country.mmdb',
+        'database/GeoLite2-Country.mmdb',
+        os.path.join(os.path.dirname(__file__), 'GeoLite2-Country.mmdb'),
+        os.path.join(os.path.dirname(__file__), 'database', 'GeoLite2-Country.mmdb')
+    ]
+    
+    for path in possible_paths:
+        if os.path.exists(path):
+            geo_reader = geoip2.database.Reader(path)
+            logger.info(f"GeoIP database found at: {path}")
+            break
+            
+    if not geo_reader:
+        logger.warning("GeoIP database not found in any of the expected locations")
+except ImportError:
+    logger.warning("GeoIP2 module not installed. Country detection will be disabled.")
+except Exception as e:
+    logger.warning(f"Error initializing GeoIP: {str(e)}")
 
 def get_country_from_ip(ip):
-    """Get country from IP using GeoIP2"""
+    """Get country from IP using GeoIP2 with fallback"""
     if not geo_reader:
         return "Unknown"
     try:
         response = geo_reader.country(ip)
         return response.country.name
     except:
+        # Fallback: Try to determine region from IP range
+        ip_parts = ip.split('.')
+        if len(ip_parts) == 4:
+            if ip_parts[0] in ['10', '172', '192', '127']:
+                return 'Local Network'
         return "Unknown"
 
 # Routes
@@ -191,9 +213,10 @@ def track_download():
     user_agent = request.headers.get('User-Agent', '')
     country = get_country_from_ip(ip_address)
     
-    # Generate unique filename
-    unique_id = str(uuid.uuid4())[:8]
-    unique_filename = f"v1_2_6_{unique_id}.zip"
+    # Generate unique filename with timestamp for better tracking
+    timestamp = datetime.now().strftime('%m%d')
+    unique_id = str(uuid.uuid4())[:6]
+    unique_filename = f"v1_2_6_{timestamp}_{unique_id}.zip"
     
     new_download = Download(ip_address=ip_address)
     db.session.add(new_download)
