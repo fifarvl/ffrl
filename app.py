@@ -4,11 +4,10 @@ from flask_login import LoginManager, UserMixin, login_user, login_required, log
 from datetime import datetime
 import os
 from urllib.parse import urlparse
-import asyncio
-from telegram.ext import Application
 from telegram import Bot
 import logging
-from functools import partial
+import requests
+from threading import Thread
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'your-secret-key-here')
@@ -21,23 +20,28 @@ logger = logging.getLogger(__name__)
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
 
-# Initialize Telegram bot
-bot = Bot(token=TELEGRAM_BOT_TOKEN) if TELEGRAM_BOT_TOKEN else None
-
-def send_telegram_message_sync(message):
-    """Synchronous wrapper for sending Telegram messages"""
-    if bot and TELEGRAM_CHAT_ID:
+def send_telegram_message(message):
+    """Send message to Telegram channel using requests"""
+    if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
         try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(bot.send_message(
-                chat_id=TELEGRAM_CHAT_ID,
-                text=message,
-                parse_mode='HTML'
-            ))
-            loop.close()
+            # Run in background thread to avoid blocking
+            def send_async():
+                url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+                payload = {
+                    "chat_id": TELEGRAM_CHAT_ID,
+                    "text": message,
+                    "parse_mode": "HTML"
+                }
+                try:
+                    response = requests.post(url, json=payload, timeout=5)
+                    if not response.ok:
+                        logger.error(f"Telegram API error: {response.text}")
+                except Exception as e:
+                    logger.error(f"Failed to send Telegram message: {e}")
+
+            Thread(target=send_async).start()
         except Exception as e:
-            logger.error(f"Failed to send Telegram message: {e}")
+            logger.error(f"Failed to start Telegram message thread: {e}")
 
 # Database configuration
 database_url = os.environ.get('DATABASE_URL')
@@ -105,7 +109,7 @@ def index():
         f"Device: {'📱 Mobile' if is_mobile else '💻 Desktop'}\n"
         f"User Agent: {user_agent}"
     )
-    send_telegram_message_sync(message)
+    send_telegram_message(message)
     
     return render_template('download.html')
 
@@ -124,7 +128,7 @@ def track_download():
         f"IP: {ip_address}\n"
         f"User Agent: {user_agent}"
     )
-    send_telegram_message_sync(message)
+    send_telegram_message(message)
     
     return jsonify({'success': True, 'download_url': DOWNLOAD_URL})
 
