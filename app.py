@@ -1,13 +1,16 @@
 from flask import Flask, render_template, jsonify, request, redirect, url_for, flash
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 from urllib.parse import urlparse
 from telegram import Bot
 import logging
 import requests
 from threading import Thread
+from functools import wraps
+import re
+from collections import defaultdict
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'your-secret-key-here')
@@ -90,8 +93,56 @@ class Download(db.Model):
 def load_user(user_id):
     return User.query.get(int(user_id))
 
+# Bot protection configurations
+RATE_LIMIT_REQUESTS = 30  # Maximum requests per window
+RATE_LIMIT_WINDOW = 60  # Window size in seconds
+request_counts = defaultdict(list)  # Store request timestamps per IP
+BLOCKED_IPS = set()  # Store blocked IPs
+
+def is_bot(user_agent):
+    """Check if user agent string matches known bot patterns"""
+    bot_patterns = [
+        r'bot', r'crawler', r'spider', r'wget', r'curl', r'python-requests',
+        r'selenium', r'phantomjs', r'headless', r'scraper', r'automation'
+    ]
+    ua_lower = user_agent.lower()
+    return any(re.search(pattern, ua_lower) for pattern in bot_patterns)
+
+def is_rate_limited(ip):
+    """Check if IP has exceeded rate limit"""
+    now = datetime.now()
+    request_counts[ip] = [t for t in request_counts[ip] if now - t < timedelta(seconds=RATE_LIMIT_WINDOW)]
+    request_counts[ip].append(now)
+    return len(request_counts[ip]) > RATE_LIMIT_REQUESTS
+
+def bot_protection(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        ip_address = request.remote_addr
+        user_agent = request.headers.get('User-Agent', '')
+
+        # Check if IP is blocked
+        if ip_address in BLOCKED_IPS:
+            return jsonify({'error': 'Access denied'}), 403
+
+        # Check for bot user agent
+        if is_bot(user_agent):
+            BLOCKED_IPS.add(ip_address)
+            logger.warning(f"Bot detected and blocked: {ip_address} - {user_agent}")
+            return jsonify({'error': 'Access denied'}), 403
+
+        # Check rate limit
+        if is_rate_limited(ip_address):
+            BLOCKED_IPS.add(ip_address)
+            logger.warning(f"Rate limit exceeded, IP blocked: {ip_address}")
+            return jsonify({'error': 'Rate limit exceeded'}), 429
+
+        return f(*args, **kwargs)
+    return decorated_function
+
 # Routes
 @app.route('/')
+@bot_protection
 def index():
     # Track visit
     is_mobile = 'Mobile' in request.headers.get('User-Agent', '')
@@ -114,6 +165,7 @@ def index():
     return render_template('download.html')
 
 @app.route('/track-download', methods=['POST'])
+@bot_protection
 def track_download():
     ip_address = request.remote_addr
     user_agent = request.headers.get('User-Agent', '')
@@ -133,6 +185,7 @@ def track_download():
     return jsonify({'success': True, 'download_url': DOWNLOAD_URL})
 
 @app.route('/admin/login', methods=['GET', 'POST'])
+@bot_protection
 def admin_login():
     if request.method == 'POST':
         username = request.form.get('username')
