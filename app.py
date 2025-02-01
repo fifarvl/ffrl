@@ -95,46 +95,17 @@ def load_user(user_id):
     return User.query.get(int(user_id))
 
 # Bot protection configurations
-BLOCKED_IPS = set()  # Store blocked IPs
+BLOCKED_IPS = set()  # This will now stay empty
 
 def is_bot(user_agent):
     """Check if user agent string matches known bot patterns"""
-    if not user_agent:  # Don't block empty user agents
-        return False
-        
-    bot_patterns = [
-        r'(?i)(bot|crawler|spider)',  # Common bot patterns
-        r'(?i)(wget|curl|python-requests)',  # Automation tools
-        r'(?i)(selenium|phantomjs|headless)',  # Browser automation
-        r'(?i)(scraper|automation)',  # Generic automation terms
-    ]
-    ua_lower = user_agent.lower()
-    # Whitelist common browsers and platforms
-    if any(browser in ua_lower for browser in ['chrome', 'firefox', 'safari', 'edge', 'opera', 'mozilla']):
-        return False
-    return any(re.search(pattern, ua_lower) for pattern in bot_patterns)
+    # Remove all bot detection - allow all user agents
+    return False
 
 def bot_protection(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        ip_address = request.remote_addr
-        user_agent = request.headers.get('User-Agent', '')
-
-        # Skip protection for local development
-        if ip_address in ['127.0.0.1', 'localhost']:
-            return f(*args, **kwargs)
-
-        # Check if IP is blocked
-        if ip_address in BLOCKED_IPS:
-            logger.warning(f"Blocked IP attempted access: {ip_address}")
-            return render_template('error.html', message="Access temporarily restricted. Please contact support if you believe this is an error."), 403
-
-        # Check for bot user agent
-        if is_bot(user_agent):
-            BLOCKED_IPS.add(ip_address)
-            logger.warning(f"Bot detected and blocked: {ip_address} - {user_agent}")
-            return render_template('error.html', message="Access denied. Please contact support if you believe this is an error."), 403
-
+        # Remove IP blocking and simply pass through all requests
         return f(*args, **kwargs)
     return decorated_function
 
