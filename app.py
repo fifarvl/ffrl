@@ -95,26 +95,50 @@ def load_user(user_id):
     return User.query.get(int(user_id))
 
 # Bot protection configurations
-RATE_LIMIT_REQUESTS = 30  # Maximum requests per window
+RATE_LIMIT_REQUESTS = 60  # Increased from 30 to 60 requests per window
 RATE_LIMIT_WINDOW = 60  # Window size in seconds
 request_counts = defaultdict(list)  # Store request timestamps per IP
 BLOCKED_IPS = set()  # Store blocked IPs
 
+# Constants for visit rate limiting
+VISIT_RATE_LIMIT_WINDOW = 300  # 5 minutes in seconds
+visit_timestamps = defaultdict(list)
+
 def is_bot(user_agent):
     """Check if user agent string matches known bot patterns"""
+    if not user_agent:  # Don't block empty user agents
+        return False
+        
     bot_patterns = [
-        r'bot', r'crawler', r'spider', r'wget', r'curl', r'python-requests',
-        r'selenium', r'phantomjs', r'headless', r'scraper', r'automation'
+        r'(?i)(bot|crawler|spider)',  # Common bot patterns
+        r'(?i)(wget|curl|python-requests)',  # Automation tools
+        r'(?i)(selenium|phantomjs|headless)',  # Browser automation
+        r'(?i)(scraper|automation)',  # Generic automation terms
     ]
     ua_lower = user_agent.lower()
+    # Whitelist common browsers and platforms
+    if any(browser in ua_lower for browser in ['chrome', 'firefox', 'safari', 'edge', 'opera', 'mozilla']):
+        return False
     return any(re.search(pattern, ua_lower) for pattern in bot_patterns)
 
 def is_rate_limited(ip):
     """Check if IP has exceeded rate limit"""
     now = datetime.now()
+    # Clean up old timestamps
     request_counts[ip] = [t for t in request_counts[ip] if now - t < timedelta(seconds=RATE_LIMIT_WINDOW)]
     request_counts[ip].append(now)
+    
+    # More lenient rate limiting
+    if ip in ['127.0.0.1', 'localhost']:  # Don't rate limit localhost
+        return False
+        
     return len(request_counts[ip]) > RATE_LIMIT_REQUESTS
+
+def is_recent_visit(ip):
+    """Check if IP has visited recently (within 5 minutes)"""
+    now = datetime.now()
+    visit_timestamps[ip] = [t for t in visit_timestamps[ip] if now - t < timedelta(seconds=VISIT_RATE_LIMIT_WINDOW)]
+    return len(visit_timestamps[ip]) > 0
 
 def bot_protection(f):
     @wraps(f)
@@ -122,21 +146,26 @@ def bot_protection(f):
         ip_address = request.remote_addr
         user_agent = request.headers.get('User-Agent', '')
 
+        # Skip protection for local development
+        if ip_address in ['127.0.0.1', 'localhost']:
+            return f(*args, **kwargs)
+
         # Check if IP is blocked
         if ip_address in BLOCKED_IPS:
-            return jsonify({'error': 'Access denied'}), 403
+            logger.warning(f"Blocked IP attempted access: {ip_address}")
+            return render_template('error.html', message="Access temporarily restricted. Please try again later."), 403
 
         # Check for bot user agent
         if is_bot(user_agent):
             BLOCKED_IPS.add(ip_address)
             logger.warning(f"Bot detected and blocked: {ip_address} - {user_agent}")
-            return jsonify({'error': 'Access denied'}), 403
+            return render_template('error.html', message="Access denied. Please contact support if you believe this is an error."), 403
 
         # Check rate limit
         if is_rate_limited(ip_address):
-            BLOCKED_IPS.add(ip_address)
-            logger.warning(f"Rate limit exceeded, IP blocked: {ip_address}")
-            return jsonify({'error': 'Rate limit exceeded'}), 429
+            # Don't permanently block, just temporary rate limit
+            logger.warning(f"Rate limit exceeded: {ip_address}")
+            return render_template('error.html', message="Too many requests. Please try again in a minute."), 429
 
         return f(*args, **kwargs)
     return decorated_function
@@ -186,23 +215,32 @@ def get_country_from_ip(ip):
 @app.route('/')
 @bot_protection
 def index():
-    # Track visit
-    is_mobile = 'Mobile' in request.headers.get('User-Agent', '')
     ip_address = request.remote_addr
     user_agent = request.headers.get('User-Agent', '')
+    is_mobile = 'Mobile' in user_agent
     
-    new_visit = Visit(is_mobile=is_mobile, ip_address=ip_address)
-    db.session.add(new_visit)
-    db.session.commit()
+    # Only track visit and send notification if it's not a recent visit
+    if not is_recent_visit(ip_address):
+        # Add timestamp for this visit
+        visit_timestamps[ip_address].append(datetime.now())
+        
+        # Track visit in database
+        new_visit = Visit(is_mobile=is_mobile, ip_address=ip_address)
+        db.session.add(new_visit)
+        db.session.commit()
 
-    # Send Telegram notification
-    message = (
-        f"🌐 New Visit:\n"
-        f"IP: {ip_address}\n"
-        f"Device: {'📱 Mobile' if is_mobile else '💻 Desktop'}\n"
-        f"User Agent: {user_agent}"
-    )
-    send_telegram_message(message)
+        # Get country for the notification
+        country = get_country_from_ip(ip_address)
+
+        # Send Telegram notification with country
+        message = (
+            f"🌐 New Visit:\n"
+            f"IP: {ip_address}\n"
+            f"Country: {country}\n"
+            f"Device: {'📱 Mobile' if is_mobile else '💻 Desktop'}\n"
+            f"User Agent: {user_agent}"
+        )
+        send_telegram_message(message)
     
     return render_template('download.html')
 
