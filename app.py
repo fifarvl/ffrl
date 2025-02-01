@@ -95,14 +95,7 @@ def load_user(user_id):
     return User.query.get(int(user_id))
 
 # Bot protection configurations
-RATE_LIMIT_REQUESTS = 60  # Increased from 30 to 60 requests per window
-RATE_LIMIT_WINDOW = 60  # Window size in seconds
-request_counts = defaultdict(list)  # Store request timestamps per IP
 BLOCKED_IPS = set()  # Store blocked IPs
-
-# Constants for visit rate limiting
-VISIT_RATE_LIMIT_WINDOW = 300  # 5 minutes in seconds
-visit_timestamps = defaultdict(list)
 
 def is_bot(user_agent):
     """Check if user agent string matches known bot patterns"""
@@ -121,25 +114,6 @@ def is_bot(user_agent):
         return False
     return any(re.search(pattern, ua_lower) for pattern in bot_patterns)
 
-def is_rate_limited(ip):
-    """Check if IP has exceeded rate limit"""
-    now = datetime.now()
-    # Clean up old timestamps
-    request_counts[ip] = [t for t in request_counts[ip] if now - t < timedelta(seconds=RATE_LIMIT_WINDOW)]
-    request_counts[ip].append(now)
-    
-    # More lenient rate limiting
-    if ip in ['127.0.0.1', 'localhost']:  # Don't rate limit localhost
-        return False
-        
-    return len(request_counts[ip]) > RATE_LIMIT_REQUESTS
-
-def is_recent_visit(ip):
-    """Check if IP has visited recently (within 5 minutes)"""
-    now = datetime.now()
-    visit_timestamps[ip] = [t for t in visit_timestamps[ip] if now - t < timedelta(seconds=VISIT_RATE_LIMIT_WINDOW)]
-    return len(visit_timestamps[ip]) > 0
-
 def bot_protection(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
@@ -153,7 +127,7 @@ def bot_protection(f):
         # Check if IP is blocked
         if ip_address in BLOCKED_IPS:
             logger.warning(f"Blocked IP attempted access: {ip_address}")
-            return render_template('error.html', message="Access temporarily restricted. Please try again later."), 403
+            return render_template('error.html', message="Access temporarily restricted. Please contact support if you believe this is an error."), 403
 
         # Check for bot user agent
         if is_bot(user_agent):
@@ -161,14 +135,18 @@ def bot_protection(f):
             logger.warning(f"Bot detected and blocked: {ip_address} - {user_agent}")
             return render_template('error.html', message="Access denied. Please contact support if you believe this is an error."), 403
 
-        # Check rate limit
-        if is_rate_limited(ip_address):
-            # Don't permanently block, just temporary rate limit
-            logger.warning(f"Rate limit exceeded: {ip_address}")
-            return render_template('error.html', message="Too many requests. Please try again in a minute."), 429
-
         return f(*args, **kwargs)
     return decorated_function
+
+# Constants for visit tracking (5 minute window)
+VISIT_WINDOW = 300  # 5 minutes in seconds
+visit_timestamps = defaultdict(list)
+
+def is_recent_visit(ip):
+    """Check if IP has visited recently (within 5 minutes)"""
+    now = datetime.now()
+    visit_timestamps[ip] = [t for t in visit_timestamps[ip] if now - t < timedelta(seconds=VISIT_WINDOW)]
+    return len(visit_timestamps[ip]) > 0
 
 # Initialize GeoIP reader
 geo_reader = None
