@@ -170,6 +170,153 @@
             color: #22c55e;
             font-weight: 600;
         }
+
+        .ip-blocking-section {
+            margin-bottom: 30px;
+        }
+
+        .block-ip-form {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        .block-ip-form h2 {
+            font-size: 18px;
+            margin-bottom: 20px;
+            color: rgba(255, 255, 255, 0.9);
+        }
+
+        .form-group {
+            display: flex;
+            gap: 10px;
+        }
+
+        .form-group input {
+            flex: 1;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: white;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+
+        .form-group input::placeholder {
+            color: rgba(255, 255, 255, 0.5);
+        }
+
+        .block-btn {
+            background: #dc2626;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 500;
+        }
+
+        .blocked-ips-list {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            padding: 20px;
+        }
+
+        .blocked-ips-list h2 {
+            font-size: 18px;
+            margin-bottom: 20px;
+            color: rgba(255, 255, 255, 0.9);
+        }
+
+        .blocked-ip-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .blocked-ip-item:last-child {
+            border-bottom: none;
+        }
+
+        .ip-info {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .ip-pattern {
+            color: #dc2626;
+            font-weight: 600;
+            font-family: monospace;
+        }
+
+        .block-reason {
+            color: rgba(255, 255, 255, 0.7);
+            font-size: 14px;
+        }
+
+        .block-time {
+            color: rgba(255, 255, 255, 0.5);
+            font-size: 12px;
+        }
+
+        .unblock-btn {
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.2s;
+        }
+
+        .unblock-btn:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        .no-blocks {
+            color: rgba(255, 255, 255, 0.5);
+            text-align: center;
+            padding: 20px;
+            font-style: italic;
+        }
+
+        /* Flash Messages */
+        .flash-messages {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1000;
+        }
+
+        .flash {
+            background: rgba(34, 197, 94, 0.9);
+            color: white;
+            padding: 12px 20px;
+            border-radius: 6px;
+            margin-bottom: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            animation: slideIn 0.3s ease-out;
+        }
+
+        .flash.error {
+            background: rgba(220, 38, 38, 0.9);
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
     </style>
 </head>
 <body>
@@ -226,6 +373,40 @@
             </div>
         </div>
 
+        <!-- IP Blocking Section -->
+        <div class="ip-blocking-section">
+            <div class="block-ip-form">
+                <h2>Block IP Address</h2>
+                <form action="{{ url_for('block_ip') }}" method="POST">
+                    <div class="form-group">
+                        <input type="text" name="ip_pattern" placeholder="IP or pattern (e.g., 192.168 or 10.214)" required>
+                        <input type="text" name="reason" placeholder="Reason for blocking">
+                        <button type="submit" class="block-btn">Block IP</button>
+                    </div>
+                </form>
+            </div>
+
+            <div class="blocked-ips-list">
+                <h2>Blocked IP Addresses</h2>
+                {% if blocked_ips %}
+                    {% for ip in blocked_ips %}
+                    <div class="blocked-ip-item">
+                        <div class="ip-info">
+                            <span class="ip-pattern">{{ ip.ip_pattern }}</span>
+                            <span class="block-reason">{{ ip.reason }}</span>
+                            <span class="block-time">Blocked on: {{ ip.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</span>
+                        </div>
+                        <form action="{{ url_for('unblock_ip', id=ip.id) }}" method="POST" class="unblock-form">
+                            <button type="submit" class="unblock-btn">Unblock</button>
+                        </form>
+                    </div>
+                    {% endfor %}
+                {% else %}
+                    <p class="no-blocks">No blocked IP addresses</p>
+                {% endif %}
+            </div>
+        </div>
+
         <div class="activity-list">
             <h2>Recent Activity</h2>
             {% for activity in recent_activities %}
@@ -238,6 +419,17 @@
             </div>
             {% endfor %}
         </div>
+    </div>
+
+    <!-- Flash Messages Container -->
+    <div class="flash-messages">
+        {% with messages = get_flashed_messages() %}
+            {% if messages %}
+                {% for message in messages %}
+                    <div class="flash">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
     </div>
 
     <script>
@@ -291,6 +483,18 @@
                     }
                 }
             }
+        });
+
+        // Auto-hide flash messages
+        document.addEventListener('DOMContentLoaded', function() {
+            const flashes = document.querySelectorAll('.flash');
+            flashes.forEach(flash => {
+                setTimeout(() => {
+                    flash.style.opacity = '0';
+                    flash.style.transform = 'translateX(100%)';
+                    setTimeout(() => flash.remove(), 300);
+                }, 5000);
+            });
         });
     </script>
 </body>
