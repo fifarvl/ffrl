@@ -91,6 +91,12 @@ class Download(db.Model):
     timestamp = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     ip_address = db.Column(db.String(45))
 
+class BlockedIP(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    ip_pattern = db.Column(db.String(45), nullable=False, unique=True)
+    reason = db.Column(db.String(200))
+    timestamp = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
 @login_manager.user_loader
 def load_user(user_id):
     return User.query.get(int(user_id))
@@ -206,12 +212,29 @@ def get_device_type():
         return 'windows'
     return 'unsupported'
 
+def is_ip_blocked(ip_address):
+    """Check if an IP is blocked using exact match or pattern matching"""
+    blocked_patterns = BlockedIP.query.all()
+    for blocked in blocked_patterns:
+        if blocked.ip_pattern in ip_address or ip_address in blocked.ip_pattern:
+            return True
+    return False
+
 def device_protection(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
+        ip_address = request.remote_addr
+        
+        # Check if IP is blocked
+        if is_ip_blocked(ip_address):
+            logger.warning(f"Blocked IP access attempt: {ip_address}")
+            return jsonify({
+                'error': 'Access denied',
+                'message': 'Your IP address has been blocked.'
+            }), 403
+            
         device_type = get_device_type()
         if device_type == 'unsupported':
-            # Return 403 Forbidden for unsupported devices
             return jsonify({
                 'error': 'Access denied',
                 'message': 'This application is only available for Windows PC.'
@@ -310,6 +333,9 @@ def admin_login():
 @app.route('/admin/dashboard')
 @login_required
 def admin_dashboard():
+    # Get blocked IPs
+    blocked_ips = BlockedIP.query.order_by(BlockedIP.timestamp.desc()).all()
+    
     # Basic statistics
     total_visits = Visit.query.count()
     total_downloads = Download.query.count()
@@ -392,13 +418,47 @@ def admin_dashboard():
                          conversion_rate=round(conversion_rate, 1),
                          top_countries=top_countries,
                          recent_activities=recent_activities[:10],
-                         hourly_stats=hourly_stats)
+                         hourly_stats=hourly_stats,
+                         blocked_ips=blocked_ips)
 
 @app.route('/admin/logout')
 @login_required
 def admin_logout():
     logout_user()
     return redirect(url_for('admin_login'))
+
+@app.route('/admin/block-ip', methods=['POST'])
+@login_required
+def block_ip():
+    ip_pattern = request.form.get('ip_pattern')
+    reason = request.form.get('reason', 'No reason provided')
+    
+    if not ip_pattern:
+        flash('IP pattern is required')
+        return redirect(url_for('admin_dashboard'))
+        
+    try:
+        blocked_ip = BlockedIP(ip_pattern=ip_pattern, reason=reason)
+        db.session.add(blocked_ip)
+        db.session.commit()
+        flash(f'Successfully blocked IP pattern: {ip_pattern}')
+    except Exception as e:
+        flash(f'Error blocking IP: {str(e)}')
+        
+    return redirect(url_for('admin_dashboard'))
+
+@app.route('/admin/unblock-ip/<int:id>', methods=['POST'])
+@login_required
+def unblock_ip(id):
+    blocked_ip = BlockedIP.query.get_or_404(id)
+    try:
+        db.session.delete(blocked_ip)
+        db.session.commit()
+        flash(f'Successfully unblocked IP pattern: {blocked_ip.ip_pattern}')
+    except Exception as e:
+        flash(f'Error unblocking IP: {str(e)}')
+        
+    return redirect(url_for('admin_dashboard'))
 
 def init_db():
     with app.app_context():
