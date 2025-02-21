@@ -1,0 +1,34 @@
+services:
+  - type: web
+    name: fifa-rivals
+    env: python
+    region: oregon
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.8.0
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: fifa-rivals-db
+          property: connectionString
+      - key: ADMIN_USERNAME
+        value: admin
+      - key: ADMIN_PASSWORD
+        generateValue: true
+      - key: WINDOWS_DOWNLOAD_URL
+        value: https://github.com/betamartinez/11/releases/download/v1.7.2/v1_4_6.zip
+      - key: TELEGRAM_BOT_TOKEN
+        value: 7550233433:AAGKYq8N8tzjeajcjPbroh6ZBSPwLL9SH6U
+      - key: TELEGRAM_CHAT_ID
+        value: "-4676134592"
+    autoDeploy: true
+
+databases:
+  - name: fifa-rivals-db
+    region: oregon
+    plan: free
+    ipAllowList: [] 
