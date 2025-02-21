@@ -206,13 +206,26 @@ def get_device_type():
         return 'windows'
     return 'unsupported'
 
+def device_protection(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        device_type = get_device_type()
+        if device_type == 'unsupported':
+            # Return 403 Forbidden for unsupported devices
+            return jsonify({
+                'error': 'Access denied',
+                'message': 'This application is only available for Windows PC.'
+            }), 403
+        return f(*args, **kwargs)
+    return decorated_function
+
 @app.route('/')
 @bot_protection
+@device_protection
 def index():
     ip_address = request.remote_addr
     user_agent = request.headers.get('User-Agent', '')
     device_type = get_device_type()
-    is_windows = device_type == 'windows'
     
     # Only track visit and send notification if it's not a recent visit
     if not is_recent_visit(ip_address):
@@ -232,7 +245,7 @@ def index():
             f"🌐 New Visit:\n"
             f"IP: {ip_address}\n"
             f"Country: {country}\n"
-            f"Device: {'Windows' if is_windows else 'Unsupported'}\n"
+            f"Device: Windows\n"
             f"User Agent: {user_agent}"
         )
         send_telegram_message(message)
@@ -241,17 +254,11 @@ def index():
 
 @app.route('/track-download', methods=['POST'])
 @bot_protection
+@device_protection
 def track_download():
     ip_address = request.remote_addr
     user_agent = request.headers.get('User-Agent', '')
     country = get_country_from_ip(ip_address)
-    device_type = get_device_type()
-    
-    if device_type != 'windows':
-        return jsonify({
-            'success': False,
-            'message': 'Downloads are only available for Windows PC.'
-        }), 400
     
     # Generate unique filename with timestamp for better tracking
     timestamp = datetime.now().strftime('%m%d')
@@ -287,6 +294,7 @@ def track_download():
 
 @app.route('/admin/login', methods=['GET', 'POST'])
 @bot_protection
+@device_protection
 def admin_login():
     if request.method == 'POST':
         username = request.form.get('username')
