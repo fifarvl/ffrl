@@ -100,13 +100,51 @@ BLOCKED_IPS = set()  # This will now stay empty
 
 def is_bot(user_agent):
     """Check if user agent string matches known bot patterns"""
-    # Remove all bot detection - allow all user agents
-    return False
+    if not user_agent:
+        return True
+        
+    user_agent = user_agent.lower()
+    
+    # List of blocked bot user agents
+    blocked_bots = [
+        'twitterbot',
+        'censysinspect',
+        'telegrambot',
+        'bot',
+        'crawler',
+        'spider',
+        'curl',
+        'wget',
+        'python-requests',
+        'python-urllib',
+        'semrushbot',
+        'petalbot',
+        'ahrefsbot',
+        'mj12bot',
+        'dotbot',
+        'applebot',
+        'yandexbot',
+        'baiduspider',
+        'bingbot',
+        'slurp'
+    ]
+    
+    return any(bot in user_agent for bot in blocked_bots)
 
 def bot_protection(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        # Remove IP blocking and simply pass through all requests
+        user_agent = request.headers.get('User-Agent', '')
+        ip_address = request.remote_addr
+        
+        if is_bot(user_agent):
+            # Log blocked bot attempt
+            logger.warning(f"Blocked bot access - IP: {ip_address}, UA: {user_agent}")
+            return jsonify({
+                'error': 'Access denied',
+                'message': 'This resource is not available to bots or crawlers.'
+            }), 403
+            
         return f(*args, **kwargs)
     return decorated_function
 
